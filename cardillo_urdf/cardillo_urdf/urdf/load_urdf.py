@@ -205,21 +205,24 @@ def load_urdf(
             parent_link = system.contributions_map[joint.parent]
             child_link = system.contributions_map[joint.child]
             if joint.joint_type == "fixed" and joint.name not in system.contributions_map:
-                if joint.name in ["FR_hip_fixed", "FL_hip_fixed", "RR_hip_fixed", "RL_hip_fixed"]:
+                if joint.name in []:
                     c_joint = RigidConnection(parent_link, child_link)
                     c_joint.name = joint.name
                     system.add(c_joint)
                     print(f"Added joint '{joint.name}' of type 'fixed' as cardillo constraint of type 'RigidConnection'.")
                 else:
+                    print(f"mass of {child_link.name}: {child_link.mass} ")
+
                     c_joint = RigidlyAttachedRigidBody(
-                        mass=link.inertial.mass, 
-                        B_Theta_C=link.inertial.inertia,
+                        mass=child_link.mass, 
+                        B_Theta_C=child_link.B_Theta_C,
                         body=child_link,
                         r_OC0=r_OB_child,
                         A_IB0=A_IB_child
                     )
                     c_joint.name = joint.name
                     system.add(c_joint)
+                    print(f"mass of {c_joint.name}: {link.inertial.mass} ")
                     print(f"Added joint '{joint.name}' of type 'fixed' as cardillo constraint of type 'RigidlyAttachedRigidBody'.")
 
             else:
