@@ -1,5 +1,5 @@
 from cardillo import System
-from urchin import URDF
+from cardillo_urdf.urdf.lxml_URDF import URDF
 import trimesh
 from cardillo_urdf.urdf import link_forward_kinematics
 from cardillo_urdf.joints import RevoluteJoint, FloatingJoint, RigidJoint
@@ -178,7 +178,7 @@ def load_urdf(
     gravitational_acceleration=None,
 ):
     grav_acc = gravitational_acceleration
-    urdf_system = URDF.load(file)
+    urdf_system = URDF(file)
     H_IS, H_IL, H_IJ, H_CV, v_C, S_Omega = link_forward_kinematics(
         urdf_system,
         r_OC0=r_OC0,
