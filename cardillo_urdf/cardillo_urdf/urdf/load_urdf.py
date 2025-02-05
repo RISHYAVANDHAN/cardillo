@@ -1,7 +1,7 @@
 from cardillo import System
-from cardillo_urdf.urdf.lxml_URDF import URDF
 import trimesh
 from cardillo_urdf.urdf import link_forward_kinematics
+from cardillo_urdf.parser import URDF
 from cardillo_urdf.joints import RevoluteJoint, FloatingJoint, RigidJoint
 import numpy as np
 
@@ -178,7 +178,7 @@ def load_urdf(
     gravitational_acceleration=None,
 ):
     grav_acc = gravitational_acceleration
-    urdf_system = URDF(file)
+    urdf_system = URDF.load(file)
     H_IS, H_IL, H_IJ, H_CV, v_C, S_Omega = link_forward_kinematics(
         urdf_system,
         r_OC0=r_OC0,
@@ -190,13 +190,17 @@ def load_urdf(
     )
     initial_config = urdf_system._process_cfg(initial_config)
 
-    add_base_link(system, urdf_system.base_link, S_Omega, H_IS, v_C, H_CV, grav_acc, base_link_is_floating, v_C0, C0_Omega_0)                    
+    add_base_link(system, urdf_system.base_link, S_Omega, H_IS, v_C, H_CV, grav_acc, base_link_is_floating, v_C0, C0_Omega_0)
+
+    print(
+                f"Name of the base_link is '{urdf_system.base_link.name}' ."
+            )                    
     #add_links(system,urdf_system.links, H_IS, S_Omega, v_C, H_CV, grav_acc)
     #add_joints(system,urdf_system.joints,H_IL,urdf_system,initial_config,urdf_system.links)
-    for i, link in enumerate(urdf_system.links):
+    for i, lnk in enumerate(urdf_system.links):
             if i == 0:
                 continue
-            add_links(system,urdf_system.links, H_IS, S_Omega, v_C, H_CV, grav_acc,link)
+            add_links(system,urdf_system.links, H_IS, S_Omega, v_C, H_CV, grav_acc,lnk)
 
 
     for i,joint in enumerate(urdf_system.joints):
@@ -205,22 +209,18 @@ def load_urdf(
             parent_link = system.contributions_map[joint.parent]
             child_link = system.contributions_map[joint.child]
             if joint.joint_type == "fixed" and joint.name not in system.contributions_map:
-                if joint.name in ["FR_hip_fixed", "FL_hip_fixed", "RR_hip_fixed", "RL_hip_fixed"]:
-                    c_joint = RigidConnection(parent_link, child_link)
-                    c_joint.name = joint.name
-                    system.add(c_joint)
-                    print(f"Added joint '{joint.name}' of type 'fixed' as cardillo constraint of type 'RigidConnection'.")
-                else:
-                    c_joint = RigidlyAttachedRigidBody(
-                        mass=link.inertial.mass, 
-                        B_Theta_C=link.inertial.inertia,
+                #print(f"mass of joint '{joint.name}' of value '{child_link.mass}'.")
+                #print(f"inertia of joint '{joint.name}' of value '{child_link.B_Theta_C}'")
+                c_joint = RigidlyAttachedRigidBody(
+                        mass=child_link.mass, 
+                        B_Theta_C=child_link.B_Theta_C,
                         body=child_link,
                         r_OC0=r_OB_child,
                         A_IB0=A_IB_child
                     )
-                    c_joint.name = joint.name
-                    system.add(c_joint)
-                    print(f"Added joint '{joint.name}' of type 'fixed' as cardillo constraint of type 'RigidlyAttachedRigidBody'.")
+                c_joint.name = joint.name
+                system.add(c_joint)
+                print(f"Added joint '{joint.name}' of type 'fixed' as cardillo constraint of type 'RigidlyAttachedRigidBody'.")
 
             else:
                 add_joints(system,urdf_system.joints,H_IL,urdf_system,initial_config,urdf_system.links,joint,A_IB_child,r_OB_child,parent_link,child_link)
