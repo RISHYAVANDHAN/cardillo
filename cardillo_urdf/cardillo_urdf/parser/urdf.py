@@ -22,7 +22,7 @@
 #
 # Modifications by [Cardillo] on [Feb 5, 2025]:
 # - Changed default values for 'mass' and 'inertia' in 'inertial.setter'
-# - Set mass to 1e-12 and inertia to a 3x3 diagnoal matrix with 1e-12
+# - changes between lines 2656 to 2672 and line 1335 and in line 1344 from float(value) to value and removed the line 1353
 
 
 
@@ -1332,6 +1332,7 @@ class Inertial(URDFType):
         self.mass = mass
         self.inertia = inertia
         self.origin = origin
+        self._is_massless_connector = (mass is None and inertia is None)
 
     @property
     def mass(self):
@@ -1340,7 +1341,7 @@ class Inertial(URDFType):
 
     @mass.setter
     def mass(self, value):
-        self._mass = float(value)
+        self._mass = value
 
     @property
     def inertia(self):
@@ -1349,9 +1350,8 @@ class Inertial(URDFType):
 
     @inertia.setter
     def inertia(self, value):
-        value = np.asanyarray(value).astype(np.float64)
-        if not np.allclose(value, value.T):
-            raise ValueError("Inertia must be a symmetric matrix")
+        #if not np.allclose(value, value.T):
+        #    raise ValueError("Inertia must be a symmetric matrix")
         self._inertia = value
 
     @property
@@ -2653,14 +2653,22 @@ class Link(URDFTypeWithMesh):
         """:class:`.Inertial` : Inertial properties of the link."""
         return self._inertial
 
-    @inertial.setter
-    def inertial(self, value):
-        if value is not None and not isinstance(value, Inertial):
-            raise TypeError("Expected Inertial object")
-        # Set default inertial
-        if value is None:
-            #the modified values of mass and inertia from 1 and np.eye(3).
-            value = Inertial(mass=1e-12, inertia=np.array([[1e-12, 0.0, 0.0],[0.0, 1e-12, 0.0],[0.0, 0.0, 1e-12]]))
+    @inertial.setter     
+    def inertial(self, value):         
+        if value is not None and not isinstance(value, Inertial):             
+            raise TypeError("Expected Inertial object")                  
+            
+        # If value is None, we'll create a proper zero inertial object         
+        # rather than tiny values that cause numerical issues         
+        if value is None:             
+            # Create an inertial object with None values
+            value = Inertial(mass=None, inertia=None)            
+            # Set flag for special handling             
+            value._is_massless_connector = True             
+        else:             
+            # Regular inertial object - check if it should be flagged as massless
+            value._is_massless_connector = (value.mass is None and value.inertia is None)                  
+            
         self._inertial = value
 
     @property

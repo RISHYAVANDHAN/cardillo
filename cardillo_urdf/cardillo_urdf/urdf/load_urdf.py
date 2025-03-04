@@ -1,169 +1,67 @@
-from cardillo import System
-import trimesh
-from cardillo_urdf.urdf import link_forward_kinematics
-from cardillo_urdf.parser import URDF
-from cardillo_urdf.joints import RevoluteJoint, FloatingJoint, RigidJoint
 import numpy as np
-
+import trimesh
+from cardillo import System
+from cardillo_urdf.parser import URDF
+from cardillo_urdf.urdf import link_forward_kinematics
 from cardillo.discrete import Meshed, Frame, RigidBody, RigidlyAttachedRigidBody
 from cardillo.constraints import Revolute, RigidConnection, Prismatic
 from cardillo.forces import Force
-from cardillo.math import Spurrier
-from cardillo.math import cross3, norm
+from cardillo.math import Spurrier, cross3, norm
 
-def add_base_link(system, base_link, S_Omega, H_IS, v_C, H_CV, grav_acc, base_link_is_floating, v_C0, C0_Omega_0):
-    
-    if base_link_is_floating:
-        q0 = np.hstack([H_IS[base_link][:3, 3], Spurrier(H_IS[base_link][:3, :3])])
-        u0 = np.hstack([v_C[base_link], S_Omega[base_link]])
-        if len(base_link.visuals) != 0:
-            mesh = trimesh.util.concatenate(base_link.visuals[0].geometry.meshes)
-            c_base_link = Meshed(RigidBody)(
-                mesh_obj=mesh,
-                B_r_CP=H_CV[base_link][:3, 3],
-                A_BM=H_CV[base_link][:3, :3],
-                mass=base_link.inertial.mass,
-                B_Theta_C=base_link.inertial.inertia,
-                q0=q0,
-                u0=u0,
-            )
-        else:
-            c_base_link = RigidBody(
-                mass=base_link.inertial.mass,
-                B_Theta_C=base_link.inertial.inertia,
-                q0=q0,
-                u0=u0,
-            )
-        print(
-                f"Added link '{base_link.name}' as cardillo body of type 'RigidBody'."
-            )
+def combine_transforms(transform1, transform2):
+    """Combine two 4x4 homogeneous transformation matrices."""
+    return np.dot(transform1, transform2)
+
+def _is_massless(link):
+    """Determine if a link is massless or inertialess."""
+    return (
+        link.inertial is None or 
+        (hasattr(link.inertial, '_is_massless_connector') and link.inertial._is_massless_connector) or
+        (hasattr(link.inertial, 'mass') and link.inertial.mass is None)
+    )
+
+def _create_frame(link, H_IS, H_CV):
+    """Create a Frame object for a link, with optional visual mesh."""
+    if len(link.visuals) != 0:
+        mesh = trimesh.util.concatenate(
+            link.visuals[0].geometry.meshes)
+        return Meshed(Frame)(
+            mesh_obj=mesh,
+            B_r_CP=H_CV[link][:3, 3],
+            A_BM=H_CV[link][:3, :3],
+            r_OP=H_IS[link][:3, 3],
+            A_IB=H_IS[link][:3, :3],
+        )
     else:
-        if not np.all(np.concatenate([v_C0, C0_Omega_0]) == 0):
-            raise ValueError(
-                "initial velocities for base_link specified, but base_link is not floating."
-            )
-        if len(base_link.visuals) != 0:
-            mesh = trimesh.util.concatenate(base_link.visuals[0].geometry.meshes)
-            
-            c_base_link = Meshed(Frame)(
-                mesh_obj=mesh,
-                B_r_CP=H_CV[base_link][:3, 3],
-                A_BM=H_CV[base_link][:3, :3],
-                r_OP=H_IS[base_link][:3, 3],
-                A_IB=H_IS[base_link][:3, :3],
-            )
-        else:
-            c_base_link = Frame(
-                r_OP=H_IS[base_link][:3, 3],
-                A_IB=H_IS[base_link][:3, :3],
-            )
-        print(
-                f"Added link '{base_link.name}' as cardillo body of type 'Frame'."
-            )
+        return Frame(
+            r_OP=H_IS[link][:3, 3],
+            A_IB=H_IS[link][:3, :3],
+        )
 
-    c_base_link.name = base_link.name
-    system.add(c_base_link)
-
-    if (grav_acc is not None) and base_link_is_floating:
-        c_link = system.contributions_map[c_base_link.name]
-        grav = Force(c_link.mass * grav_acc, c_link)
-        grav.name = "gravity_" + c_link.name
-        system.add(grav)
-        print(f"Added gravity for link '{c_link.name}'.")
+def _create_rigid_body(link, H_IS, H_CV, q0, u0):
+    """Create a RigidBody object for a link."""
+    mass = link.inertial.mass if link.inertial else None
+    inertia = link.inertial.inertia if link.inertial else None
     
-def add_joints(system, joints, H_IL, urdf_system, initial_config, links,joint,A_IB_child,r_OB_child,parent_link,child_link):
-            
-            if joint.joint_type in ["continuous", "revolute", "prismatic"]:
-                # construct joint basis with B_child_exJ = joint.axis
-                axis = 0
-                e1 = joint.axis / norm(joint.axis)
-                if np.abs(e1[0]) == 1:
-                    e2 = cross3(e1, np.array([0, 1, 0]))
-                else:
-                    e2 = cross3(e1, np.array([1, 0, 0]))
-
-                e2 /= norm(e2)
-                e3 = cross3(e1, e2)
-                A_B_child_J = np.array([e1, e2, e3]).T
-                A_IJ = A_IB_child @ A_B_child_J
-                if joint.joint_type == "revolute":
-                    c_joint = Revolute(
-                        parent_link,
-                        child_link,
-                        axis=axis,
-                        angle0=initial_config[joint],
-                        r_OJ0=r_OB_child,
-                        A_IJ0=A_IJ,
-                    )
-                    c_joint.name = joint.name
-                    system.add(c_joint)
-
-                    print(
-                        f"Added joint '{joint.name}' of type '{joint.joint_type}' as cardillo constraint of type 'Revolute'."
-                    )
-
-                elif joint.joint_type == "prismatic":
-                    c_joint = Prismatic(
-                        parent_link,
-                        child_link,
-                        axis = axis,
-                        r_OJ0=r_OB_child,
-                        A_IJ0=A_IJ,
-                        
-                    )
-                    c_joint.name = joint.name
-                    system.add(c_joint)
-
-                    print(
-                        f"Added joint '{joint.name}' of type '{joint.joint_type}' as cardillo constraint of type 'Prismatic'."
-                    )
-            
-            elif joint.joint_type == "floating":
-                print(
-                    f"Added joint '{joint.name}' of type '{joint.joint_type}' by not adding any cardillo constraint."
-                )
-            else:
-                print(
-                    f"Joint '{joint.name}' of type '{joint.joint_type}' could not be added."
-                )
-   
-def add_links(system, links, H_IS, S_Omega, v_C, H_CV, grav_acc,link):
-    
-        q0 = np.hstack([H_IS[link][:3, 3], Spurrier(H_IS[link][:3, :3])])
-        u0 = np.hstack([v_C[link], S_Omega[link]])
-        if len(link.visuals) != 0:
-                # extract mesh
-                mesh = trimesh.util.concatenate(link.visuals[0].geometry.meshes)
-
-                c_link = Meshed(RigidBody)(
-                    mesh_obj=mesh,
-                    B_r_CP=H_CV[link][:3, 3],
-                    A_BM=H_CV[link][:3, :3],
-                    mass=link.inertial.mass,
-                    B_Theta_C=link.inertial.inertia,
-                    q0=q0,
-                    u0=u0,
-                )
-        else:
-                c_link = RigidBody(
-                    mass=link.inertial.mass,
-                    B_Theta_C=link.inertial.inertia,
-                    q0=q0,
-                    u0=u0,
-                )
-        c_link.name = link.name
-        system.add(c_link)
-        print(
-                f"Added link '{link.name}' as cardillo body of type 'RigidBody'."
-            )
-
-        if grav_acc is not None:
-            c_link = system.contributions_map[c_link.name]
-            grav = Force(c_link.mass * grav_acc, c_link)
-            grav.name = "gravity_" + c_link.name
-            system.add(grav)
-            print(f"Added gravity for link '{c_link.name}'.")
-
+    if len(link.visuals) != 0:
+        mesh = trimesh.util.concatenate(
+            link.visuals[0].geometry.meshes)
+        return Meshed(RigidBody)(
+            mesh_obj=mesh,
+            B_r_CP=H_CV[link][:3, 3],
+            A_BM=H_CV[link][:3, :3],
+            mass=mass,
+            B_Theta_C=inertia,
+            q0=q0,
+            u0=u0,
+        )
+    else:
+        return RigidBody(
+            mass=mass,
+            B_Theta_C=inertia,
+            q0=q0,
+            u0=u0,
+        )
 
 def load_urdf(
     system,
@@ -177,9 +75,24 @@ def load_urdf(
     base_link_is_floating=False,
     gravitational_acceleration=None,
 ):
-    grav_acc = gravitational_acceleration
+    """
+    Load a URDF file into a Cardillo system with advanced tree-based processing.
+    
+    Args:
+        system (System): Cardillo system to add robot to
+        file (str): Path to URDF file
+        r_OC0 (np.ndarray): Initial position of base link
+        A_IC0 (np.ndarray): Initial orientation of base link
+        v_C0 (np.ndarray): Initial linear velocity of base link
+        C0_Omega_0 (np.ndarray): Initial angular velocity of base link
+        initial_config (dict, optional): Initial joint configurations
+        initial_vel (dict, optional): Initial joint velocities
+        base_link_is_floating (bool, optional): Whether base link can move freely
+        gravitational_acceleration (np.ndarray, optional): Gravity vector
+    """
+    # Load URDF and calculate kinematics
     urdf_system = URDF.load(file)
-    H_IS, H_IL, H_IJ, H_CV, v_C, S_Omega = link_forward_kinematics(
+    H_IS, H_IL, H_IJ, H_SV, v_S, S_Omega = link_forward_kinematics(
         urdf_system,
         r_OC0=r_OC0,
         A_IC0=A_IC0,
@@ -189,42 +102,104 @@ def load_urdf(
         vel=initial_vel,
     )
     initial_config = urdf_system._process_cfg(initial_config)
-
-    add_base_link(system, urdf_system.base_link, S_Omega, H_IS, v_C, H_CV, grav_acc, base_link_is_floating, v_C0, C0_Omega_0)
-
-    print(
-                f"Name of the base_link is '{urdf_system.base_link.name}' ."
-            )                    
-    #add_links(system,urdf_system.links, H_IS, S_Omega, v_C, H_CV, grav_acc)
-    #add_joints(system,urdf_system.joints,H_IL,urdf_system,initial_config,urdf_system.links)
-    for i, lnk in enumerate(urdf_system.links):
-            if i == 0:
-                continue
-            add_links(system,urdf_system.links, H_IS, S_Omega, v_C, H_CV, grav_acc,lnk)
-
-
-    for i,joint in enumerate(urdf_system.joints):
-            A_IB_child = H_IL[urdf_system.link_map[joint.child]][:3, :3]
-            r_OB_child = H_IL[urdf_system.link_map[joint.child]][:3, 3]
-            parent_link = system.contributions_map[joint.parent]
-            child_link = system.contributions_map[joint.child]
-            if joint.joint_type == "fixed" and joint.name not in system.contributions_map:
-                #print(f"mass of joint '{joint.name}' of value '{child_link.mass}'.")
-                #print(f"inertia of joint '{joint.name}' of value '{child_link.B_Theta_C}'")
-                c_joint = RigidlyAttachedRigidBody(
-                        mass=child_link.mass, 
-                        B_Theta_C=child_link.B_Theta_C,
-                        body=child_link,
-                        r_OC0=r_OB_child,
-                        A_IB0=A_IB_child
-                    )
-                c_joint.name = joint.name
-                system.add(c_joint)
-                print(f"Added joint '{joint.name}' of type 'fixed' as cardillo constraint of type 'RigidlyAttachedRigidBody'.")
-
-            else:
-                add_joints(system,urdf_system.joints,H_IL,urdf_system,initial_config,urdf_system.links,joint,A_IB_child,r_OB_child,parent_link,child_link)
-
-    system.assemble()
-
     
+    # Prepare link tree for recursive processing
+    link_tree = {}
+    for joint in urdf_system.joints:
+        parent = joint.parent
+        child = joint.child
+        if parent not in link_tree:
+            link_tree[parent] = []
+        link_tree[parent].append((child, joint))
+    
+    def process_link_branch(parent_name, parent_body=None, parent_joint=None):
+        """Recursively process links and joints in the kinematic tree."""
+        if parent_name not in link_tree:
+            return
+        
+        for child_name, joint in link_tree[parent_name]:
+            child_link = urdf_system.link_map[child_name]
+            is_massless = _is_massless(child_link)
+            
+            # Print mass information
+            mass = child_link.inertial.mass if child_link.inertial else None
+            print(f"Link '{child_name}' Mass: {mass}")
+            
+            if is_massless and joint.joint_type == "fixed":
+                # For massless links with fixed joints, redirect connections
+                print("None - Massless fixed link")
+                
+                # Redirect children of massless link to its parent
+                for grandchild_joint in [j for j in urdf_system.joints if j.parent == child_name]:
+                    grandchild_joint.origin = combine_transforms(joint.origin, grandchild_joint.origin)
+                    grandchild_joint.parent = parent_name
+                    process_link_branch(grandchild_joint.child, parent_body, grandchild_joint)
+            else:
+                # Compute link transformation and initial conditions
+                q0 = np.hstack([H_IS[child_link][:3, 3], Spurrier(H_IS[child_link][:3, :3])])
+                u0 = np.hstack([v_S[child_link], S_Omega[child_link]])
+                
+                # Create cardillo body
+                child_body = (
+                    _create_rigid_body(child_link, H_IS, H_SV, q0, u0) 
+                    if not is_massless 
+                    else _create_frame(child_link, H_IS, H_SV)
+                )
+                
+                child_body.name = child_link.name
+                system.add(child_body)
+                
+                # Add gravity if applicable
+                if gravitational_acceleration is not None and mass is not None:
+                    grav = Force(mass * gravitational_acceleration, child_body)
+                    grav.name = f"gravity_{child_body.name}"
+                    system.add(grav)
+                
+                # Add joint connecting to parent
+                if parent_joint and parent_joint.joint_type != "floating":
+                    A_IB_child = H_IL[child_link][:3, :3]
+                    r_OB_child = H_IL[child_link][:3, 3]
+                    
+                    if parent_joint.joint_type == "fixed":
+                        # Use RigidlyAttachedRigidBody for fixed joints
+                        rigid_attach = RigidlyAttachedRigidBody(
+                            mass=mass,
+                            B_Theta_C=child_link.inertial.inertia if child_link.inertial else None,
+                            body=parent_body,
+                            r_OC0=r_OB_child,
+                            A_IB0=A_IB_child
+                        )
+                        rigid_attach.name = parent_joint.name
+                        system.add(rigid_attach)
+                    elif parent_joint.joint_type in ["revolute", "continuous", "prismatic"]:
+                        # Revolute and prismatic joints
+                        axis = parent_joint.axis / norm(parent_joint.axis)
+                        
+                        if parent_joint.joint_type in ["revolute", "continuous"]:
+                            joint_constraint = Revolute(
+                                parent_body,
+                                child_body,
+                                axis=0,
+                                angle0=initial_config.get(parent_joint, 0),
+                                r_OJ0=r_OB_child,
+                                A_IJ0=A_IB_child
+                            )
+                        else:  # prismatic
+                            joint_constraint = Prismatic(
+                                parent_body,
+                                child_body,
+                                axis=0,
+                                r_OJ0=r_OB_child,
+                                A_IJ0=A_IB_child
+                            )
+                        
+                        joint_constraint.name = parent_joint.name
+                        system.add(joint_constraint)
+                
+                process_link_branch(child_name, child_body, parent_joint)
+    
+    # Process the entire kinematic tree starting from base link
+    process_link_branch(urdf_system.base_link.name)
+    
+    system.assemble()
+    return urdf_system
